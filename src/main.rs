@@ -38,21 +38,41 @@ fn main() -> Result<(), Box<dyn Error>> {
             jmex::VisitorAction::Recurse
         }
 
+        fn visit_property_end(&mut self, branch: &jmex::ParserBranch) {
+            println!("Visited property at {:?}", branch);
+        }
+
         fn visit_array(&mut self, branch: &jmex::ParserBranch) -> jmex::VisitorAction {
+            println!("Visiting array at {:?}", branch);
+
             jmex::VisitorAction::Recurse
         }
 
-        fn visit_array_end(&mut self, branch: &jmex::ParserBranch) {}
+        fn visit_array_end(&mut self, branch: &jmex::ParserBranch) {
+            println!("Visited array at {:?}", branch);
+        }
 
         fn visit_array_element(&mut self, branch: &jmex::ParserBranch) -> jmex::VisitorAction {
+            println!("Visiting array element at {:?}", branch);
+
             jmex::VisitorAction::Recurse
         }
 
-        fn visit_number(&mut self, branch: &jmex::ParserBranch, num: f64) {}
+        fn visit_array_element_end(&mut self, branch: &jmex::ParserBranch) {
+            println!("Visited array element at {:?}", branch);
+        }
 
-        fn visit_bool(&mut self, branch: &jmex::ParserBranch, b: bool) {}
+        fn visit_number(&mut self, branch: &jmex::ParserBranch, num: f64) {
+            println!("[{:?}]: Num: {}", branch, num);
+        }
 
-        fn visit_null(&mut self, branch: &jmex::ParserBranch) {}
+        fn visit_bool(&mut self, branch: &jmex::ParserBranch, b: bool) {
+            println!("[{:?}]: Bool: {}", branch, b);
+        }
+
+        fn visit_null(&mut self, branch: &jmex::ParserBranch) {
+            println!("[{:?}]: null", branch);
+        }
 
         fn visit_str_strategy(
             &mut self,

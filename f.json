@@ -1,0 +1,10 @@
+{
+    aa: {cc: "d", ee: 'e'},
+    "bd": [true, false, null],
+
+    ca: true,
+    dc: false,
+    ef: null,
+
+    "a": 0.0,
+}

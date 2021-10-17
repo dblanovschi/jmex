@@ -1,18 +1,30 @@
-use std::{
-    fs::File,
-    io::{Read, Stdin},
-};
+use std::{convert::TryInto, fs::File, io::{Cursor, Read, Stdin}};
 
 pub enum Input {
     Stdin(Stdin),
     File(File),
+    String(Cursor<Vec<u8>>),
 }
 
 impl Input {
+    pub fn from_string(s: String) -> Self {
+        let c = Cursor::new(s.into_bytes());
+        Self::String(c)
+    }
+
+    pub fn from_stdin(s: Stdin) -> Self {
+        Self::Stdin(s)
+    }
+
+    pub fn from_file(f: File) -> Self {
+        Self::File(f)
+    }
+
     fn input(&mut self) -> &mut dyn Read {
         match self {
-            Input::Stdin(stdin) => stdin,
-            Input::File(f) => f,
+            Self::Stdin(stdin) => stdin,
+            Self::File(f) => f,
+            Self::String(s) => s,
         }
     }
 }
@@ -129,10 +141,6 @@ impl ParserBranch {
             .pop()
             .ok_or(PopError::NoElement)?
             .try_into_object()
-            .map(|tp| {
-                self.pop_unimportant();
-                tp
-            })
             .map_err(|it| {
                 self.fragments.push(it);
                 PopError::NotProperType
@@ -144,22 +152,31 @@ impl ParserBranch {
             .pop()
             .ok_or(PopError::NoElement)?
             .try_into_array()
-            .map(|tp| {
-                self.pop_unimportant();
-                tp
-            })
             .map_err(|it| {
                 self.fragments.push(it);
                 PopError::NotProperType
             })
     }
 
-    fn pop_unimportant(&mut self) {
-        while let Some(
-            ParserBranchFragment::ArrayElement(_, _) | ParserBranchFragment::Property(_, _),
-        ) = self.fragments.last()
-        {
-            self.fragments.pop();
+    fn pop_property(&mut self) -> Result<(), PopError> {
+        match self.fragments.last() {
+            Some(ParserBranchFragment::Property(_, _)) => {
+                self.fragments.pop();
+                Ok(())
+            }
+            Some(_) => Err(PopError::NotProperType),
+            None => Err(PopError::NoElement),
+        }
+    }
+
+    fn pop_array_element(&mut self) -> Result<(), PopError> {
+        match self.fragments.last() {
+            Some(ParserBranchFragment::ArrayElement(_, _)) => {
+                self.fragments.pop();
+                Ok(())
+            }
+            Some(_) => Err(PopError::NotProperType),
+            None => Err(PopError::NoElement),
         }
     }
 
@@ -190,7 +207,7 @@ enum PopError {
 }
 
 #[cfg(feature = "small-buf")]
-const BUFFER_SIZE: usize = 4;
+const BUFFER_SIZE: usize = 1;
 
 #[cfg(not(feature = "small-buf"))]
 const BUFFER_SIZE: usize = 16 * 8092;
@@ -215,37 +232,43 @@ impl<'a> ParserState<'a> {
 
             self.pos = 0;
             self.size = self.input.input().read(&mut self.buf).expect("IO error");
-
-            if self.size == 0 {
-                panic!("Unexpecte EOF");
-            }
         }
     }
 
+    fn at_eof(&self) -> bool {
+        self.pos == 0 && self.size == 0
+    }
+
     fn current(&self) -> u8 {
+        if self.at_eof() {
+            panic!("Unexpected EOF");
+        }
+
         self.buf[self.pos]
     }
 
-    fn at_byte(&self, b: u8) -> bool {
+    fn at(&self, b: u8) -> bool {
         self.current() == b
     }
 
-    fn at(&self, ch: char) -> bool {
-        debug_assert_eq!(ch.len_utf8(), 1);
-
-        self.at_byte(ch as u8)
-    }
-
-    fn expect_byte(&mut self, b: u8) {
+    fn expect(&mut self, b: u8) {
         assert_eq!(self.current(), b);
 
         self.bump();
     }
 
-    fn expect(&mut self, ch: char) {
-        debug_assert_eq!(ch.len_utf8(), 1);
+    fn expect_from_kw(&mut self, b: u8, kw: &[u8]) {
+        let current = self.current();
+        assert_eq!(
+            current,
+            b,
+            "Expecting {} (from keyword {}), got: {}",
+            b as char,
+            std::str::from_utf8(kw).expect("UTF8"),
+            current as char
+        );
 
-        self.expect_byte(ch as u8);
+        self.bump();
     }
 
     fn current_text_offset(&self) -> TextPos {
@@ -264,6 +287,7 @@ pub enum VisitStrStrategy {
     RawChunked,
 }
 
+#[allow(unused_variables)]
 pub trait Visitor {
     fn visit_object(&mut self, branch: &ParserBranch) -> VisitorAction {
         VisitorAction::Recurse
@@ -287,6 +311,8 @@ pub trait Visitor {
         VisitorAction::Recurse
     }
 
+    fn visit_array_element_end(&mut self, branch: &ParserBranch) {}
+
     fn visit_number(&mut self, branch: &ParserBranch, num: f64) {}
     fn visit_bool(&mut self, branch: &ParserBranch, b: bool) {}
     fn visit_null(&mut self, branch: &ParserBranch) {}
@@ -305,14 +331,147 @@ pub trait Visitor {
 type OptVis<'a> = Option<&'a mut dyn Visitor>;
 
 fn parse_value(state: &mut ParserState, vis: OptVis) {
-    if state.at('{') {
-        parse_object(state, vis);
+    let ch = state.current();
+
+    match ch {
+        b'{' => parse_object(state, vis),
+        b'[' => parse_array(state, vis),
+
+        b't' | b'f' => try_parse_bool(state, vis),
+        b'n' => try_parse_null(state, vis),
+
+        b'\'' => {
+            parse_single_quote_whole_parsed_str(state);
+        }
+        b'"' => {
+            parse_double_quote_whole_parsed_str(state);
+        }
+
+        b'0'..=b'9' | b'-' => {
+            parse_number(state, vis);
+        }
+
+        _ => unreachable!(),
+    }
+}
+
+fn try_parse_kw(state: &mut ParserState, kw: &[u8]) {
+    for b in kw {
+        state.expect_from_kw(*b, kw);
+    }
+
+    let c = state.current();
+    if !c.is_ascii_whitespace() && c != b',' && c != b']' && c != b'}' && c != b':' {
+        panic!(
+            "Unexpected char after keyword {}: {}",
+            std::str::from_utf8(kw).expect("UTF8"),
+            c
+        )
+    }
+}
+
+fn parse_number(state: &mut ParserState, vis: OptVis) {
+    let neg = if state.at(b'-') {
+        state.bump();
+        true
+    } else {
+        false
+    };
+
+    let whole = parse_int(state);
+
+    let frac = if !state.at_eof() && state.at(b'.') {
+        state.bump();
+
+        parse_frac(state)
+    } else {
+        0.
+    };
+
+    let exp = if !state.at_eof() && (state.at(b'E') || state.at(b'e')) {
+        state.bump();
+
+        let sign = if state.at(b'-') {
+            state.bump();
+            -1_i64
+        } else if state.at(b'+') {
+            state.bump();
+            1
+        } else {
+            1
+        };
+
+        let num = parse_int(state);
+
+        num * sign
+    } else {
+        0
+    };
+
+    if let Some(vis) = vis {
+        let num = (whole as f64 + frac) * 10_f64.powi(exp.try_into().unwrap());
+        vis.visit_number(&state.current_branch, num);
+    }
+}
+
+fn parse_int(state: &mut ParserState) -> i64 {
+    let mut num = 0;
+
+    while !state.at_eof() && (b'0'..=b'9').contains(&state.current()) {
+        let c = state.current();
+        state.bump();
+
+        num = num * 10 + (c - b'0') as i64;
+    }
+
+    num
+}
+
+fn parse_frac(state: &mut ParserState) -> f64 {
+    let mut p = 0.1;
+    let mut f = 0.;
+
+    while !state.at_eof() && (b'0'..=b'9').contains(&state.current()) {
+        let c = state.current();
+        state.bump();
+
+        f += ((c - b'0') as f64) * p;
+
+        p /= 10.;
+    }
+
+    f
+}
+
+fn try_parse_null(state: &mut ParserState, vis: OptVis) {
+    try_parse_kw(state, b"null");
+
+    if let Some(vis) = vis {
+        vis.visit_null(&state.current_branch);
+    }
+}
+
+fn try_parse_bool(state: &mut ParserState, vis: Option<&mut dyn Visitor>) {
+    if state.at(b't') {
+        try_parse_kw(state, b"true");
+
+        if let Some(vis) = vis {
+            vis.visit_bool(&state.current_branch, true);
+        }
+    } else if state.at(b'f') {
+        try_parse_kw(state, b"false");
+
+        if let Some(vis) = vis {
+            vis.visit_bool(&state.current_branch, false);
+        }
+    } else {
+        unreachable!()
     }
 }
 
 fn parse_object(state: &mut ParserState, vis: OptVis) {
     let tp = state.current_text_offset();
-    state.expect('{');
+    state.expect(b'{');
 
     state.current_branch.push_object(tp);
     skip_ws(state);
@@ -322,20 +481,20 @@ fn parse_object(state: &mut ParserState, vis: OptVis) {
             VisitorAction::Recurse => {
                 parse_object_props(state, Some(vis));
 
-                state.expect('}');
+                state.expect(b'}');
 
                 vis.visit_object_end(&state.current_branch);
             }
             VisitorAction::Continue => {
                 parse_object_props(state, None);
 
-                state.expect('}');
+                state.expect(b'}');
             }
         },
         None => {
             parse_object_props(state, None);
 
-            state.expect('}');
+            state.expect(b'}');
         }
     }
 
@@ -345,30 +504,130 @@ fn parse_object(state: &mut ParserState, vis: OptVis) {
         .expect("Something wrong happened");
 }
 
+fn parse_array(state: &mut ParserState, vis: OptVis) {
+    let tp = state.current_text_offset();
+    state.expect(b'[');
+
+    state.current_branch.push_array(tp);
+    skip_ws(state);
+
+    match vis {
+        Some(vis) => match vis.visit_object(&state.current_branch) {
+            VisitorAction::Recurse => {
+                parse_array_elements(state, Some(vis));
+
+                state.expect(b']');
+
+                vis.visit_array_end(&state.current_branch);
+            }
+            VisitorAction::Continue => {
+                parse_array_elements(state, None);
+
+                state.expect(b']');
+            }
+        },
+        None => {
+            parse_array_elements(state, None);
+
+            state.expect(b']');
+        }
+    }
+
+    state
+        .current_branch
+        .pop_array()
+        .expect("Something wrong happened");
+}
+
+fn parse_array_elements(state: &mut ParserState, vis: OptVis) {
+    skip_ws(state);
+
+    let mut idx = 0;
+
+    match vis {
+        Some(vis) => {
+            while !state.at(b']') {
+                parse_array_element(state, Some(vis), idx);
+
+                skip_ws(state);
+
+                if !state.at(b']') {
+                    state.expect(b',');
+                    skip_ws(state);
+                }
+
+                idx += 1;
+            }
+        }
+        None => {
+            while !state.at(b']') {
+                parse_array_element(state, None, idx);
+
+                skip_ws(state);
+
+                if !state.at(b']') {
+                    state.expect(b',');
+                    skip_ws(state);
+                }
+
+                idx += 1;
+            }
+        }
+    }
+}
+
+fn parse_array_element(state: &mut ParserState, vis: OptVis, elem_idx: usize) {
+    skip_ws(state);
+
+    let tp = state.current_text_offset();
+
+    state
+        .current_branch
+        .push_array_element(tp, ArrayIndex(elem_idx));
+
+    match vis {
+        Some(vis) => match vis.visit_array_element(&state.current_branch) {
+            VisitorAction::Recurse => {
+                parse_value(state, Some(vis));
+
+                vis.visit_array_element_end(&state.current_branch);
+            }
+            VisitorAction::Continue => {
+                parse_value(state, None);
+            }
+        },
+        None => {
+            parse_value(state, None);
+        }
+    }
+
+    state.current_branch.pop_array_element().unwrap();
+}
+
 fn parse_object_props(state: &mut ParserState, vis: OptVis) {
     skip_ws(state);
 
     match vis {
         Some(vis) => {
-            while !state.at('}') {
+            while !state.at(b'}') {
                 parse_property(state, Some(vis));
 
                 skip_ws(state);
 
-                if !state.at('}') {
-                    state.expect(',');
+                if !state.at(b'}') {
+                    state.expect(b',');
                     skip_ws(state);
                 }
             }
         }
         None => {
-            while !state.at('}') {
+            while !state.at(b'}') {
                 parse_property(state, None);
 
                 skip_ws(state);
 
-                if !state.at('}') {
-                    state.expect(',');
+                if !state.at(b'}') {
+                    state.expect(b',');
                     skip_ws(state);
                 }
             }
@@ -383,7 +642,7 @@ fn parse_property(state: &mut ParserState, vis: OptVis) {
     state.current_branch.push_property(tp, p);
 
     skip_ws(state);
-    state.expect(':');
+    state.expect(b':');
 
     skip_ws(state);
 
@@ -391,6 +650,8 @@ fn parse_property(state: &mut ParserState, vis: OptVis) {
         Some(vis) => match vis.visit_property(&state.current_branch) {
             VisitorAction::Recurse => {
                 parse_value(state, Some(vis));
+
+                vis.visit_property_end(&state.current_branch);
             }
             VisitorAction::Continue => {
                 parse_value(state, None);
@@ -399,13 +660,13 @@ fn parse_property(state: &mut ParserState, vis: OptVis) {
         None => {}
     }
 
-    state.current_branch.pop_unimportant();
+    state.current_branch.pop_property().unwrap();
 }
 
 fn parse_property_name(state: &mut ParserState) -> String {
-    if state.at('"') {
+    if state.at(b'"') {
         parse_double_quote_whole_parsed_str(state)
-    } else if state.at('\'') {
+    } else if state.at(b'\'') {
         parse_single_quote_whole_parsed_str(state)
     } else {
         parse_ident(state)
@@ -413,7 +674,7 @@ fn parse_property_name(state: &mut ParserState) -> String {
 }
 
 fn parse_double_quote_whole_parsed_str(state: &mut ParserState) -> String {
-    state.expect('"');
+    state.expect(b'"');
 
     let mut contents = Vec::<u8>::with_capacity(32);
     let mut escaped = false;
@@ -421,18 +682,18 @@ fn parse_double_quote_whole_parsed_str(state: &mut ParserState) -> String {
     // TODO: \n, \uXXXX and similar
 
     loop {
-        if state.at('"') {
+        if state.at(b'"') {
             if escaped {
-                contents.push('"' as u8);
+                contents.push(b'"');
             } else {
                 state.bump();
                 break String::from_utf8(contents).expect("UTF8");
             }
         } else {
             let ch = state.current();
-            if ch == '\\' as u8 {
+            if ch == b'\\' {
                 if escaped {
-                    contents.push('\\' as u8);
+                    contents.push(b'\\');
                 }
 
                 escaped = !escaped;
@@ -446,7 +707,7 @@ fn parse_double_quote_whole_parsed_str(state: &mut ParserState) -> String {
 }
 
 fn parse_single_quote_whole_parsed_str(state: &mut ParserState) -> String {
-    state.expect('\'');
+    state.expect(b'\'');
 
     let mut contents = Vec::<u8>::with_capacity(32);
     let mut escaped = false;
@@ -454,18 +715,18 @@ fn parse_single_quote_whole_parsed_str(state: &mut ParserState) -> String {
     // TODO: \n, \uXXXX and similar
 
     loop {
-        if state.at('\'') {
+        if state.at(b'\'') {
             if escaped {
-                contents.push('\'' as u8);
+                contents.push(b'\'');
             } else {
                 state.bump();
                 break String::from_utf8(contents).expect("UTF8");
             }
         } else {
             let ch = state.current();
-            if ch == '\\' as u8 {
+            if ch == b'\\' {
                 if escaped {
-                    contents.push('\\' as u8);
+                    contents.push(b'\\');
                 }
 
                 escaped = !escaped;
@@ -483,7 +744,7 @@ fn parse_ident(state: &mut ParserState) -> String {
 
     loop {
         let ch = state.current();
-        if (ch as char).is_whitespace() || ch == ':' as u8 {
+        if (ch as char).is_whitespace() || ch == b':' {
             break String::from_utf8(contents).expect("UTF8");
         } else if "$".contains(ch as char) || (ch as char).is_ascii_alphanumeric() {
             contents.push(ch)
@@ -515,7 +776,7 @@ pub fn run(mut input: Input, exe: String, vis: &mut dyn Visitor) -> Result<(), E
         begin_offset: 0,
     };
 
-    parse_object(&mut state, Some(vis));
+    parse_value(&mut state, Some(vis));
 
     Ok(())
 }
