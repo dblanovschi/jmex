@@ -763,7 +763,7 @@ fn parse_ident(state: &mut ParserState) -> String {
 }
 
 fn skip_ws(state: &mut ParserState) {
-    while (state.current() as char).is_whitespace() {
+    while !state.at_eof() && state.current().is_ascii_whitespace() {
         state.bump();
     }
 }
@@ -782,6 +782,7 @@ pub fn run(mut input: Input, exe: String, vis: &mut dyn Visitor) -> Result<(), E
         begin_offset: 0,
     };
 
+    skip_ws(&mut state);
     parse_value(&mut state, Some(vis));
 
     Ok(())
