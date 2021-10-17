@@ -104,6 +104,7 @@ name = "jmex"
 version = "0.1.0"
 dependencies = [
  "ansi_term",
+ "atty",
  "clap",
  "thiserror",
 ]

@@ -89,7 +89,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    jmex::run(input, app.exe, &mut PrintVisitor::new(true))?;
+    jmex::run(input, app.exe, &mut PrintVisitor::new(atty::is(atty::Stream::Stdout)))?;
 
     Ok(())
 }

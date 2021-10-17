@@ -14,3 +14,4 @@ small-buf = []
 clap = "3.0.0-beta.2"
 thiserror = "1"
 ansi_term = "0.12"
+atty = "0.2"
