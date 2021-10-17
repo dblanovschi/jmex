@@ -6,10 +6,11 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["small-buf"]
+default = []
 
 small-buf = []
 
 [dependencies]
 clap = "3.0.0-beta.2"
 thiserror = "1"
+ansi_term = "0.12"
