@@ -1,4 +1,8 @@
-use std::{convert::TryInto, fs::File, io::{Cursor, Read, Stdin}};
+use std::{
+    convert::TryInto,
+    fs::File,
+    io::{Cursor, Read, Stdin},
+};
 
 pub enum Input {
     Stdin(Stdin),
@@ -360,13 +364,15 @@ fn try_parse_kw(state: &mut ParserState, kw: &[u8]) {
         state.expect_from_kw(*b, kw);
     }
 
-    let c = state.current();
-    if !c.is_ascii_whitespace() && c != b',' && c != b']' && c != b'}' && c != b':' {
-        panic!(
-            "Unexpected char after keyword {}: {}",
-            std::str::from_utf8(kw).expect("UTF8"),
-            c
-        )
+    if !state.at_eof() {
+        let c = state.current();
+        if !c.is_ascii_whitespace() && c != b',' && c != b']' && c != b'}' && c != b':' {
+            panic!(
+                "Unexpected char after keyword {}: {}",
+                std::str::from_utf8(kw).expect("UTF8"),
+                c
+            )
+        }
     }
 }
 

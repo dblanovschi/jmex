@@ -12,6 +12,7 @@ fn main() {
     jmex::run(Input::from_string(r#"0.1E10"#.into()), "".into(), &mut Vis).unwrap();
     jmex::run(Input::from_string(r#"0."#.into()), "".into(), &mut Vis).unwrap();
     jmex::run(Input::from_string(r#"-1"#.into()), "".into(), &mut Vis).unwrap();
+    jmex::run(Input::from_string(r#"true"#.into()), "".into(), &mut Vis).unwrap();
 }
 
 struct Vis;
