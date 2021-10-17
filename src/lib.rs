@@ -371,11 +371,11 @@ fn try_parse_kw(state: &mut ParserState, kw: &[u8]) {
 }
 
 fn parse_number(state: &mut ParserState, vis: OptVis) {
-    let neg = if state.at(b'-') {
+    let sign = if state.at(b'-') {
         state.bump();
-        true
+        -1.
     } else {
-        false
+        1.
     };
 
     let whole = parse_int(state);
@@ -409,7 +409,7 @@ fn parse_number(state: &mut ParserState, vis: OptVis) {
     };
 
     if let Some(vis) = vis {
-        let num = (whole as f64 + frac) * 10_f64.powi(exp.try_into().unwrap());
+        let num = sign * (whole as f64 + frac) * 10_f64.powi(exp.try_into().unwrap());
         vis.visit_number(&state.current_branch, num);
     }
 }
