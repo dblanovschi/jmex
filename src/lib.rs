@@ -1,11 +1,10 @@
 use std::{
-    borrow::Borrow,
     convert::TryInto,
     fs::File,
     io::{Cursor, Read, Stdin},
 };
 
-use ansi_term::{Color, Style};
+use ansi_term::Color;
 
 pub enum Input {
     Stdin(Stdin),
@@ -1219,12 +1218,7 @@ impl Visitor for PrintVisitor {
         let d = print_depth_m4(branch);
 
         if self.ansi {
-            print!(
-                "{:ident$}{}",
-                "",
-                Color::White.bold().paint("}"),
-                ident = d
-            );
+            print!("{:ident$}{}", "", Color::White.bold().paint("}"), ident = d);
         } else {
             print!("{:ident$}}}", "", ident = d);
         }
@@ -1323,10 +1317,7 @@ impl Visitor for PrintVisitor {
 
     fn visit_bool(&mut self, branch: ParserBranchRef, b: bool) {
         if self.ansi {
-            print!(
-                "{}",
-                Color::Cyan.bold().paint(format!("{}", b))
-            );
+            print!("{}", Color::Cyan.bold().paint(format!("{}", b)));
         } else {
             print!("{}", b);
         }
